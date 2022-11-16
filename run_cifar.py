@@ -69,13 +69,13 @@ def train(args, model, device, trainset, model_optimizer, epoch,
 
     # Get permutation to shuffle trainset
     trainset_permutation_inds = npr.permutation(
-        np.arange(len(trainset.train_labels)))
+        np.arange(len(trainset)))
 
     print('\n=> Training Epoch #%d' % (epoch))
 
     batch_size = args.batch_size
     for batch_idx, batch_start_ind in enumerate(
-            range(0, len(trainset.train_labels), batch_size)):
+            range(0, len(trainset), batch_size)):
 
         # Get trainset indices for batch
         batch_inds = trainset_permutation_inds[batch_start_ind:
@@ -87,7 +87,7 @@ def train(args, model, device, trainset, model_optimizer, epoch,
             transformed_trainset.append(trainset.__getitem__(ind)[0])
         inputs = torch.stack(transformed_trainset)
         targets = torch.LongTensor(
-            np.array(trainset.train_labels)[batch_inds].tolist())
+            np.array(trainset.targets)[batch_inds].tolist())
 
         # Map to available device
         inputs, targets = inputs.to(device), targets.to(device)
@@ -161,20 +161,20 @@ def test(epoch, model, device, example_stats):
     model.eval()
 
     for batch_idx, batch_start_ind in enumerate(
-            range(0, len(test_dataset.test_labels), test_batch_size)):
+            range(0, len(test_dataset), test_batch_size)):
 
         # Get batch inputs and targets
         transformed_testset = []
         for ind in range(
                 batch_start_ind,
                 min(
-                    len(test_dataset.test_labels),
+                    len(test_dataset),
                     batch_start_ind + test_batch_size)):
             transformed_testset.append(test_dataset.__getitem__(ind)[0])
         inputs = torch.stack(transformed_testset)
         targets = torch.LongTensor(
             np.array(
-                test_dataset.test_labels)[batch_start_ind:batch_start_ind +
+                test_dataset.targets)[batch_start_ind:batch_start_ind +
                                           test_batch_size].tolist())
 
         # Map to available device
@@ -296,7 +296,7 @@ parser.add_argument(
     default='cifar10_results/',
     help='directory where to read sorting file from')
 parser.add_argument(
-    '--output_dir', required=True, help='directory where to save results')
+    '--output_dir', default="/home/sjoshi/example_forgetting/results", help='directory where to save results')
 
 # Enter all arguments that you want to be in the filename of the saved output
 ordered_args = [
@@ -309,8 +309,7 @@ ordered_args = [
 args = parser.parse_args()
 args_dict = vars(args)
 print(args_dict)
-save_fname = '__'.join(
-    '{}_{}'.format(arg, args_dict[arg]) for arg in ordered_args)
+save_fname = f"{args.dataset}"
 
 # Set appropriate devices
 args.cuda = not args.no_cuda and torch.cuda.is_available()
@@ -349,33 +348,33 @@ os.makedirs(args.output_dir, exist_ok=True)
 if args.dataset == 'cifar10':
     num_classes = 10
     train_dataset = datasets.CIFAR10(
-        root='/tmp/data/',
+        root='/home/sjoshi/data/cifar10/',
         train=True,
         transform=train_transform,
         download=True)
 
     test_dataset = datasets.CIFAR10(
-        root='/tmp/data/',
+        root='/home/sjoshi/data/cifar10/',
         train=False,
         transform=test_transform,
         download=True)
 elif args.dataset == 'cifar100':
     num_classes = 100
     train_dataset = datasets.CIFAR100(
-        root='/tmp/data/',
+        root='/home/sjoshi/data/cifar100/',
         train=True,
         transform=train_transform,
         download=True)
 
     test_dataset = datasets.CIFAR100(
-        root='/tmp/data/',
+        root='/home/sjoshi/data/cifar100/',
         train=False,
         transform=test_transform,
         download=True)
 
 # Get indices of examples that should be used for training
-if args.sorting_file == 'none':
-    train_indx = np.array(range(len(train_dataset.train_labels)))
+if args.sorting_file == 'none': # if no sorting file given then use all indices
+    train_indx = np.array(range(len(train_dataset)))
 else:
     try:
         with open(
@@ -393,14 +392,13 @@ else:
 
     # Remove the corresponding elements
     train_indx = np.setdiff1d(
-        range(len(train_dataset.train_labels)), elements_to_remove)
+        range(len(train_dataset)), elements_to_remove)
 
 if args.keep_lowest_n < 0:
     # Remove remove_n number of examples from the train set at random
     train_indx = npr.permutation(np.arange(len(
-        train_dataset.train_labels)))[:len(train_dataset.train_labels) -
+        train_dataset)))[:len(train_dataset) -
                                       args.remove_n]
-
 elif args.remove_subsample:
     # Remove remove_sample number of examples at random from the first keep_lowest_n examples
     # Useful when the first keep_lowest_n examples have equal forgetting counts
@@ -411,16 +409,16 @@ elif args.remove_subsample:
                             np.array(ordered_indx)[args.keep_lowest_n:]))
 
 # Reassign train data and labels
-train_dataset.train_data = train_dataset.train_data[train_indx, :, :, :]
-train_dataset.train_labels = np.array(
-    train_dataset.train_labels)[train_indx].tolist()
+train_dataset.targets = [train_dataset.targets[i] for i in range(len(train_dataset)) if i in train_indx]
+train_dataset.data = train_dataset.data[train_indx, :, :, :]
+
 
 # Introduce noise to images if specified
 if args.noise_percent_pixels:
     for ind in range(len(train_indx)):
-        image = train_dataset.train_data[ind, :, :, :]
+        image = train_dataset.data[ind, :, :, :]
         noisy_image = noisy(image, args.noise_percent_pixels, args.noise_std_pixels)
-        train_dataset.train_data[ind, :, :, :] = noisy_image
+        train_dataset.data[ind, :, :, :] = noisy_image
 
 # Introduce noise to labels if specified
 if args.noise_percent_labels:
@@ -429,9 +427,9 @@ if args.noise_percent_labels:
     with open(fname + "_changed_labels.txt", "w") as f:
 
         # Compute number of labels to change
-        nlabels = len(train_dataset.train_labels)
+        nlabels = len(train_dataset.targets)
         nlabels_to_change = int(args.noise_percent_labels * nlabels / 100)
-        nclasses = len(np.unique(train_dataset.train_labels))
+        nclasses = len(np.unique(train_dataset.targets))
         print('flipping ' + str(nlabels_to_change) + ' labels')
 
         # Randomly choose which labels to change, get indices
@@ -445,7 +443,7 @@ if args.noise_percent_labels:
             label_choices = np.arange(nclasses)
 
             # Get true label to remove it from the choices
-            true_label = train_dataset.train_labels[label_ind_to_change]
+            true_label = train_dataset.targets[label_ind_to_change]
 
             # Remove true label from choices
             label_choices = np.delete(
@@ -454,14 +452,14 @@ if args.noise_percent_labels:
 
             # Get new label and relabel the example with it
             noisy_label = npr.choice(label_choices, 1)
-            train_dataset.train_labels[label_ind_to_change] = noisy_label[0]
+            train_dataset.targets[label_ind_to_change] = noisy_label[0]
 
             # Write the example index from the original example order, the old, and the new label
             f.write(
                 str(train_indx[label_ind_to_change]) + ' ' + str(true_label) +
                 ' ' + str(noisy_label[0]) + '\n')
 
-print('Training on ' + str(len(train_dataset.train_labels)) + ' examples')
+print('Training on ' + str(len(train_dataset)) + ' examples')
 
 # Setup model
 if args.model == 'resnet18':
@@ -519,11 +517,11 @@ for epoch in range(args.epochs):
 
     # Save the stats dictionary
     fname = os.path.join(args.output_dir, save_fname)
-    with open(fname + "__stats_dict.pkl", "wb") as f:
+    with open(fname + "_stats_dict.pkl", "wb") as f:
         pickle.dump(example_stats, f)
 
     # Log the best train and test accuracy so far
-    with open(fname + "__best_acc.txt", "w") as f:
+    with open(fname + "_best_acc.txt", "w") as f:
         f.write('train test \n')
         f.write(str(max(example_stats['train'][1])))
         f.write(' ')
