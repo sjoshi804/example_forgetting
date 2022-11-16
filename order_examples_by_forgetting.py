@@ -128,18 +128,8 @@ def check_filename(fname, args_list):
 if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description="Options")
-    parser.add_argument('--input_dir', type=str, required=True)
-    parser.add_argument(
-        '--input_fname_args',
-        nargs='+',
-        help=
-        'arguments and argument values to select input filenames, i.e. arg1 val1 arg2 val2'
-    )
-    parser.add_argument('--output_dir', type=str, required=True)
-    parser.add_argument(
-        '--output_name',
-        type=str,
-        required=True)
+    parser.add_argument('--input', type=str, required=True)
+    parser.add_argument('--output', type=str, required=True)
     parser.add_argument('--epochs', type=int, default=200)
 
     args = parser.parse_args()
@@ -148,48 +138,25 @@ if __name__ == "__main__":
     # Initialize lists to collect forgetting stastics per example across multiple training runs
     unlearned_per_presentation_all, first_learned_all = [], []
 
-    for d, _, fs in os.walk(args.input_dir):
-        for f in fs:
+    # Load the dictionary compiled during training run
+    with open(args.input, 'rb') as fin:
+        loaded = pickle.load(fin)
 
-            # Find the files that match input_fname_args and compute forgetting statistics
-            if f.endswith('stats_dict.pkl') and check_filename(
-                    f, args.input_fname_args):
-                print('including file: ' + f)
+    # Compute the forgetting statistics per example for training run
+    _, unlearned_per_presentation, _, first_learned = compute_forgetting_statistics(
+        loaded, args.epochs)
 
-                # Load the dictionary compiled during training run
-                with open(os.path.join(d, f), 'rb') as fin:
-                    loaded = pickle.load(fin)
+    unlearned_per_presentation_all.append(
+        unlearned_per_presentation)
+    first_learned_all.append(first_learned)
 
-                # Compute the forgetting statistics per example for training run
-                _, unlearned_per_presentation, _, first_learned = compute_forgetting_statistics(
-                    loaded, args.epochs)
+    # Sort examples by forgetting counts in ascending order, over one or more training runs
+    ordered_examples, ordered_values = sort_examples_by_forgetting(
+        unlearned_per_presentation_all, first_learned_all, args.epochs)
 
-                unlearned_per_presentation_all.append(
-                    unlearned_per_presentation)
-                first_learned_all.append(first_learned)
-
-    if len(unlearned_per_presentation_all) == 0:
-        print('No input files found in {} that match {}'.format(
-            args.input_dir, args.input_fname_args))
-    else:
-
-        # Sort examples by forgetting counts in ascending order, over one or more training runs
-        ordered_examples, ordered_values = sort_examples_by_forgetting(
-            unlearned_per_presentation_all, first_learned_all, args.epochs)
-
-        # Save sorted output
-        if args.output_name.endswith('.pkl'):
-            with open(os.path.join(args.output_dir, args.output_name),
-                      'wb') as fout:
-                pickle.dump({
-                    'indices': ordered_examples,
-                    'forgetting counts': ordered_values
-                }, fout)
-        else:
-            with open(
-                    os.path.join(args.output_dir, args.output_name + '.pkl'),
-                    'wb') as fout:
-                pickle.dump({
-                    'indices': ordered_examples,
-                    'forgetting counts': ordered_values
-                }, fout)
+    # Save sorted output
+    with open(args.output, 'wb') as fout:
+        pickle.dump({
+            'indices': ordered_examples,
+            'forgetting counts': ordered_values
+        }, fout)
